@@ -1,0 +1,14 @@
+[
+    {
+        "url": "http://www.kit.edu/kit/english/22403.php",
+        "tolerance": 10,
+        "xpath": "//body",
+        "ignore": "//script;//style;"
+    },
+    {
+        "url": "https://muetsch.io/about/",
+        "tolerance": 0,
+        "xpath": "//div[@class='content']",
+        "ignore": "//script;//style;"
+    }
+]
