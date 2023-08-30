@@ -14,24 +14,27 @@ from lxml import html
 from adapters import SendAdapterFactory
 from model import WatchResult
 
+# Connecting to database
 try:
 
     mydb = mysql.connector.connect(
-    host = "localhost",
-    user = "root",
-    password = "!QAZxsw2",
-    database = "deltaFetch"
+        host = "localhost",
+        user = "root",
+        password = "!QAZxsw2",
+        database = "deltaFetch",
+        charset = "utf8"
     )
 
     cursorObject = mydb.cursor()
+    cursorObject.execute("SET NAMES utf8mb4; ")
+    mydb.commit()
 
     print("Connected to Database") 
 except:
     print("Error occured while connecting database, please check it") 
     sys.exit(0)
 
-# print(mydb)
-
+# Get html tags from webpage content with exp/xpath
 def get_nodes(exp, page, ignore):
     """ Returns lxml nodes corresponding to the XPath expression """
     tree = html.fromstring(page)
@@ -40,50 +43,28 @@ def get_nodes(exp, page, ignore):
             j.drop_tree()
     return tree.xpath(exp)
 
-
-def filter_document(nodes) -> str:
-    """ Returns the text content of the specified nodes """
-    text = ""
-    for element in nodes:
-        text = text + element.text_content()
-    return text
-
-
-def get_tmp_file(url: str) -> str:
-    tmp_dir = tempfile.gettempdir()
-    print(tmp_dir)
-    m = hashlib.md5()
-    m.update(url.encode('utf-8'))
-    return os.path.join(tmp_dir, f'{m.hexdigest()[:6]}_cache.txt')
-
-
-def diff_chars(a: str, b: str) -> int:
-    d = difflib.unified_diff(a, b)
-    return sum([i >= 2 and len(l) > 0 and l[0] in ['+', '-'] for i, l in enumerate(d)])
-
-def get_previous_content(jobid:int, url:str, keyword:str) -> str:
-
-    print(jobid)
-    print(url)
-    print(keyword)
+# Get previous content from database
+def get_previous_content(jobid:int, url:str, keyword:str, xpath:str) -> str:
 
     cursorObject.execute('''
-            select content from task
-            where id = %s and url = %s and keyword = %s;
-        ''',(jobid, url, keyword,))
+            select content from task where jobid = %s and url = %s and keyword = %s and xpath = %s;
+        ''',(jobid, url, keyword, xpath,))
 
     myresult = cursorObject.fetchall()
 
     if len(myresult) == 0:
         cursorObject.execute('''
-            insert into task (id, url, keyword, content)
-            where id = %s and url = %s and keyword = %s;
-        ''',(jobid, url, keyword,))
+            insert into task (jobid, url, keyword, content, xpath)
+            values (%s, %s, %s, %s, %s)
+        ''',(jobid, url, keyword,"<html></html>",xpath))
+
+        mydb.commit()
 
         return '<html></html>'
     else:
-        return myresult[0]   
+        return myresult[0][0]
     
+# Compare two node list, nodeList1 is old one.
 def compare_nodes(nodeList1, nodeList2):
     diffList = []
     for node in nodeList2:
@@ -91,12 +72,13 @@ def compare_nodes(nodeList1, nodeList2):
         for nodePrev in nodeList1:
             if node.text_content() == nodePrev.text_content():
                 flag = 1
-            break
+                break
 
-        if flag ==0:
-            diffList.push(node)
+        if flag == 0:
+            diffList.append(node)
     return diffList
 
+# Insert updated content to database
 def insert_diff(node_diff, keyword, xpath, jobid):
     diff_text = ""
     search_result = 0
@@ -117,29 +99,59 @@ def insert_diff(node_diff, keyword, xpath, jobid):
             break
         if search_result_node == 1:
             search_result = 1
+
+    if diff_text != "":
+        cursorObject.execute('''
+                insert into updated (jobid, diff, timestamp, search)
+                values (%s, %s, %s, %s);
+            ''',(jobid, diff_text, date_time.strftime("%Y-%m-%d %H:%M:%S"), search_result))
+        mydb.commit()
+
+# Update webpage content on databse
+def update_content(new_content, jobid, url, keyword, xpath):
     
     cursorObject.execute('''
-            insert into updated (jobid, diff, timestamp, result)
-            values (%s, %s, %s, %s)
-        ''',(jobid, diff_text, date_time.strftime("%m/%d/%Y %H:%M:%S"),search_result))
-        
-        
-        
+        update task set content = %s where jobid = %s and url = %s and keyword = %s and xpath = %s;
+    ''',(new_content, jobid, url, keyword, xpath))
 
-
-
-
+    mydb.commit()
+    
 def main(args, remaining_args):
 
     print(args)
 
+    # First, register crontabe if it has cron parameters
+    if args.cron != "":
+        with open("/etc/crontab", 'a', encoding='utf8', newline='') as f:
+
+            print(args.cron)
+            cron_command = ""
+            
+            for idx in range(len(args.cron)):
+                cron_command += args.cron[idx] + " "
+
+            for idx in range(5 - len(args.cron)):
+                cron_command += " *"
+            
+            cron_command += " root python3 /root/work/deltaFetch/watcher.py -u " + args.url
+            cron_command += " -j " + args.jobid 
+
+            print(cron_command)
+            f.write(cron_command)
+            f.close()
+            # f.write(args.cron +)
+
+    combined_keyword = ""
+    for word in args.keyword:
+        combined_keyword += word + " "
+
     urlList = args.url.split()
 
     for url in urlList:
-        # Read length of old web page version
-        nodePrev = get_nodes(args.xpath, get_previous_content(args.jobid, url, args.keyword), args.ignore)
+        # Read previous node from old content
+        nodePrev = get_nodes(args.xpath, get_previous_content(args.jobid, url, combined_keyword, args.xpath), args.ignore)
         
-        # Read length of current web page version
+        # Read current node from current content
         # 301 and 302 redirections are resolved automatically
         r = requests.get(url, headers = { 'user-agent': args.user_agent })
         if 200 <= r.status_code <= 299 :
@@ -147,53 +159,16 @@ def main(args, remaining_args):
         else:
             print('Could not fetch %s.' % url)
 
+        # Get different node list 
         nodeDiff = compare_nodes(nodePrev, nodeCurrent)
 
-        insert_diff(nodeDiff, args.keyword, args.xpath, args.jobid)
+        # Insert different nodes as text to database
+        insert_diff( nodeDiff, combined_keyword, args.xpath, args.jobid )
 
-        update_content(r.text)
+        # Update task with new content
+        update_content( r.text, args.jobid, url, combined_keyword, args.xpath )
 
-        
-        # tmp_location = get_tmp_file(url)
-
-        # doc1, doc2 = '', ''
-
-        # try:
-        #     adapter = SendAdapterFactory.get(args.adapter, remaining_args)
-        # except AttributeError:
-        #     sys.exit(1)
-
-        # # Read length of old web page version
-        # try:
-        #     with open(tmp_location, 'r', encoding='utf8', newline='') as f:
-        #         doc1 = filter_document(get_nodes(args.xpath, f.read(), args.ignore))
-        # except:
-        #     pass
-
-        # if args.user_agent.lower() == 'firefox':
-        #     args.user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:84.0) Gecko/20100101 Firefox/84.0' # Firefox 84 on Windows 10
-
-        # # Read length of current web page version
-        # # 301 and 302 redirections are resolved automatically
-        # r = requests.get(args.url, headers = { 'user-agent': args.user_agent })
-        # if 200 <= r.status_code <= 299 :
-        #     doc2 = filter_document(get_nodes(args.xpath, r.text, args.ignore))
-        # else:
-        #     print('Could not fetch %s.' % args.url)
-
-        # # Write new version to file
-        # try:
-        #     with open(tmp_location, 'w', encoding='utf-8', newline='') as f:
-        #         f.write(r.text)
-        # except Exception as e:
-        #     print('Could not open file %s: %s' % (tmp_location, e))
-
-        # diff = diff_chars(doc1, doc2)
-        # if diff > args.tolerance:
-        #     ok = adapter.send(WatchResult(args.url, diff))
-        #     if not ok:
-        #         sys.exit(1)
-
+        mydb.close()
 
 if __name__ == '__main__':
     if len(sys.argv) >= 3 and sys.argv[1] == 'help':
@@ -207,8 +182,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(prog='Website Watcher')
     parser.add_argument('-u', '--url', required=True, type=str, help='URL to watch')
     parser.add_argument('-j', '--jobid', required=True, type=str, help='Registered Job ID')
-    # parser.add_argument('-c', '--cron', required=True, type=str, help='Cron Parameters')
-    parser.add_argument('-k', '--keyword', default='', type=str, help='Key word list')
+    parser.add_argument('-c', '--cron', default='', type=str, nargs='+', help='Cron Parameters')
+    parser.add_argument('-k', '--keyword', default='', nargs='+', type=str, help='Key word list')
     parser.add_argument('-t', '--tolerance', default=0, type=int, help='Number of characters which have to differ between cached- and new content to trigger a notification')
     parser.add_argument('-x', '--xpath', default='//h4', type=str, help="XPath expression designating the elements to watch")
     parser.add_argument('-i', '--ignore', default='', type=str, nargs='+', help="One or multiple XPath expressions designating the elements to ignore")
