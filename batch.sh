@@ -1,5 +1,5 @@
 #!/bin/bash
-
+# python3 watcher.py -u https://finance.yahoo.com/ -j 2 -c 0 -x //a
 # ---------------------------------------------------
 # A bash script to watch multiple URLs at once, based
 # on a simple JSON config file.

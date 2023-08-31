@@ -160,10 +160,11 @@ def main(args, remaining_args):
     for url in urlList:
         # Read previous node from old content
         nodePrev = get_nodes(args.xpath, get_previous_content(args.jobid, url, combined_keyword, args.xpath), args.ignore)
-        
+        print(nodePrev)
         # Read current node from current content
         # 301 and 302 redirections are resolved automatically
         r = requests.get(url, headers = { 'user-agent': args.user_agent })
+        print(r.status_code)
         if 200 <= r.status_code <= 299 :
             nodeCurrent = get_nodes(args.xpath, r.text, args.ignore)
         else:
@@ -197,7 +198,7 @@ if __name__ == '__main__':
     parser.add_argument('-t', '--tolerance', default=0, type=int, help='Number of characters which have to differ between cached- and new content to trigger a notification')
     parser.add_argument('-x', '--xpath', default='//h4', type=str, help="XPath expression designating the elements to watch")
     parser.add_argument('-i', '--ignore', default='', type=str, nargs='+', help="One or multiple XPath expressions designating the elements to ignore")
-    parser.add_argument('-ua', '--user-agent', default='muety/website-watcher', type=str, help='User agent header to include in requests (available shortcuts: "firefox")')
+    parser.add_argument('-ua', '--user-agent', default='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36', type=str, help='User agent header to include in requests (available shortcuts: "firefox")')
     parser.add_argument('--adapter', default='stdout', type=str, help='Send method to use. See "adapters" for all available')
 
     args, remaining_args = parser.parse_known_args()
