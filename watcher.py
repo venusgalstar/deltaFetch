@@ -136,8 +136,18 @@ def main(args, remaining_args):
             cron_command += " root python3 /root/work/deltaFetch/watcher.py -u " + args.url
             cron_command += " -j " + args.jobid 
 
+            if len(args.keyword) != 0:
+                cron_command += " -k "
+                
+                for word in args.keyword:
+                    cron_command += word + " "
+
+            if args.xpath != "":
+                cron_command += " -x " + args.xpath + " " 
+
             print(cron_command)
             f.write(cron_command)
+            f.write("\n")
             f.close()
             # f.write(args.cron +)
 
